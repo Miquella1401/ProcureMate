@@ -10,7 +10,8 @@ def create_requirement_agent():
     llm = ChatGoogleGenerativeAI(
     model="models/gemini-2.5-pro",  
     google_api_key=os.getenv("GOOGLE_API_KEY"),
-    verbose=True
+    verbose=True,
+    stream=False
 )
 
 
