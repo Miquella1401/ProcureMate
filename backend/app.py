@@ -1,10 +1,10 @@
-from flask import Flask, jsonify
+from dotenv import load_dotenv
+from connect_agents import initialize_agents
 
-app = Flask(__name__)
-
-@app.route("/")
-def home():
-    return jsonify({"message": "ProcureMate Flask backend is running!"})
+def main():
+    load_dotenv()
+    print("Environment loaded.")
+    initialize_agents()
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    main()
