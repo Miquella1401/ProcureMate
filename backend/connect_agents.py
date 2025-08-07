@@ -4,11 +4,13 @@ from crewai import Crew, Task
 
 from agents.requirement.requirement_agent import create_requirement_agent
 from agents.market_intelligence.market_intelligence_agent import create_market_intelligence_agent
+from agents.price_comparator.price_comparator_agent import create_price_comparator_agent
 
 def initialize_agents():
   
     requirement_agent = create_requirement_agent()
     market_agent = create_market_intelligence_agent()
+    price_agent = create_price_comparator_agent()
 
     # Define tasks
     task1 = Task(
@@ -24,10 +26,18 @@ def initialize_agents():
         context=[task1]
     )
 
+    task3 = Task(
+    description="Using the vendor data from Task 2, compare and rank the vendors based on price, delivery time, and feature match.",
+    expected_output="A ranked list of vendors with justification for the ranking.",
+    agent=price_agent,
+    context=[task1, task2]
+)
+
+
     # code for Build the Crew
     crew = Crew(
-        agents=[requirement_agent, market_agent],
-        tasks=[task1, task2],
+        agents=[requirement_agent, market_agent, price_agent],
+        tasks=[task1, task2, task3],
         verbose=2
     )
 
