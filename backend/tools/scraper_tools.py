@@ -1,5 +1,7 @@
 # tools/scraper_tools.py
-import re, time, json
+import re
+import time
+import json
 from typing import List, Dict, Any, Optional, Tuple
 import requests
 from bs4 import BeautifulSoup
@@ -12,14 +14,21 @@ except Exception:
     HAS_PLAYWRIGHT = False
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/123.0.0.0 Safari/537.36"
+    ),
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-# -------------------------
+# --------------------------------------------------------------------
 # Vendor configuration
-# -------------------------
+#   - Add/adjust selectors per site as needed
+#   - Keep URLs to specific, high-signal product/PLP pages
+# --------------------------------------------------------------------
 VENDOR_CONFIG: Dict[str, Dict[str, Any]] = {
+    # ----- Chairs -----
     "autonomous_ergochair_pro": {
         "name": "Autonomous ErgoChair Pro",
         "url": "https://www.autonomous.ai/office-chairs/ergonomic-chair",
@@ -83,11 +92,117 @@ VENDOR_CONFIG: Dict[str, Dict[str, Any]] = {
             "availability": ["div.stock", "span.availability"],
         },
     },
+
+    # ----- Laptops -----
+    "lenovo_thinkpad_t_series": {
+        "name": "Lenovo ThinkPad T Series",
+        "url": "https://www.lenovo.com/us/en/laptops/thinkpad/thinkpad-t-series/",
+        "selectors": {
+            "title": ["meta[property='og:title']", "h1"],
+            "price": ["span.price", "meta[itemprop='price']", "div[class*='price']"],
+            "currency": ["meta[itemprop='priceCurrency']", "meta[property='product:price:currency']"],
+            "availability": ["div.stock", "span.availability"],
+        },
+    },
+    "dell_xps_13": {
+        "name": "Dell XPS 13",
+        "url": "https://www.dell.com/en-us/shop/dell-laptops/xps-13-laptop/spd/xps-13-9340-laptop",
+        "selectors": {
+            "title": ["meta[property='og:title']", "h1"],
+            "price": ["span.price", "meta[itemprop='price']", "div[class*='price']"],
+            "currency": ["meta[itemprop='priceCurrency']", "meta[property='product:price:currency']"],
+            "availability": ["div.stock", "span.availability"],
+        },
+    },
+
+    # ----- Monitors -----
+    "lg_ultragear_monitor": {
+        "name": "LG UltraGear Monitor",
+        "url": "https://www.lg.com/us/monitors/gaming-monitors",
+        "selectors": {
+            "title": ["meta[property='og:title']", "h1"],
+            "price": ["span.price", "meta[itemprop='price']", "div[class*='price']"],
+            "currency": ["meta[itemprop='priceCurrency']"],
+            "availability": ["div.stock", "span.availability"],
+        },
+    },
+
+    # ----- Keyboards -----
+    "logitech_mx_keys": {
+        "name": "Logitech MX Keys",
+        "url": "https://www.logitech.com/en-us/products/keyboards/mx-keys",
+        "selectors": {
+            "title": ["meta[property='og:title']", "h1"],
+            "price": ["span.price", "meta[itemprop='price']", "div[class*='price']"],
+            "currency": ["meta[itemprop='priceCurrency']"],
+            "availability": ["div.stock", "span.availability"],
+        },
+    },
+
+    # ----- Phones -----
+    "apple_iphone": {
+        "name": "Apple iPhone",
+        "url": "https://www.apple.com/iphone/",
+        "selectors": {
+            "title": ["meta[property='og:title']", "h1"],
+            "price": ["span.price", "meta[itemprop='price']", "div[class*='price']"],
+            "currency": ["meta[itemprop='priceCurrency']"],
+            "availability": ["div.stock", "span.availability"],
+        },
+    },
+
+    # ----- SSDs -----
+    "samsung_970_evo_plus": {
+        "name": "Samsung 970 EVO Plus",
+        "url": "https://www.samsung.com/semiconductor/minisite/ssd/product/consumer/970evoplus/",
+        "selectors": {
+            "title": ["meta[property='og:title']", "h1"],
+            "price": ["span.price", "meta[itemprop='price']"],
+            "currency": ["meta[itemprop='priceCurrency']"],
+            "availability": ["div.stock", "span.availability"],
+        },
+    },
+
+    # ----- Webcams -----
+    "logitech_brio": {
+        "name": "Logitech Brio",
+        "url": "https://www.logitech.com/en-us/products/webcams/brio-4k-hdr-webcam",
+        "selectors": {
+            "title": ["meta[property='og:title']", "h1"],
+            "price": ["span.price", "meta[itemprop='price']"],
+            "currency": ["meta[itemprop='priceCurrency']"],
+            "availability": ["div.stock", "span.availability"],
+        },
+    },
+
+    # ----- Printers -----
+    "hp_laserjet_pro": {
+        "name": "HP LaserJet Pro",
+        "url": "https://www.hp.com/us-en/shop/cv/laserjet-printers",
+        "selectors": {
+            "title": ["meta[property='og:title']", "h1"],
+            "price": ["span.price", "meta[itemprop='price']"],
+            "currency": ["meta[itemprop='priceCurrency']"],
+            "availability": ["div.stock", "span.availability"],
+        },
+    },
+
+    # ----- Desks -----
+    "uplift_standing_desk": {
+        "name": "UPLIFT Standing Desk",
+        "url": "https://www.upliftdesk.com/standing-desks/",
+        "selectors": {
+            "title": ["meta[property='og:title']", "h1"],
+            "price": ["span.price", "meta[itemprop='price']"],
+            "currency": ["meta[itemprop='priceCurrency']"],
+            "availability": ["div.stock", "span.availability"],
+        },
+    },
 }
 
-# -------------------------
+# --------------------------------------------------------------------
 # Helpers
-# -------------------------
+# --------------------------------------------------------------------
 def _first_text(soup: BeautifulSoup, selectors: List[str]) -> Optional[str]:
     for sel in selectors:
         el = soup.select_one(sel)
@@ -140,13 +255,18 @@ def _fetch_dynamic(url: str, price_selector_hint: Optional[str] = None) -> Optio
 def _parse_price(raw: Optional[str]) -> Tuple[Optional[float], Optional[str]]:
     if not raw:
         return None, None
+    # Currency hint by symbol if present
     currency = "EUR" if "€" in raw else ("USD" if "$" in raw else None)
-    m = re.search(r"([0-9]{1,3}([.,][0-9]{3})*|[0-9]+)([.,][0-9]{2})?", raw)
+
+    # Match numbers like 1,299.99 or 1.299,99 or 1299.99 etc.
+    m = re.search(r"([0-9]{1,3}(?:[.,][0-9]{3})*|[0-9]+)([.,][0-9]{2})?", raw)
     if not m:
         return None, currency
     num = m.group(0)
+
     # Normalize thousand/decimal separators
     if num.count(",") and num.count("."):
+        # Decide which is decimal by last occurrence
         if num.rfind(",") > num.rfind("."):  # decimal is comma
             num = num.replace(".", "").replace(",", ".")
         else:  # decimal is dot
@@ -156,6 +276,7 @@ def _parse_price(raw: Optional[str]) -> Tuple[Optional[float], Optional[str]]:
             num = num.replace(",", ".")
         elif "," in num and not num.endswith(",00"):
             num = num.replace(",", "")
+
     try:
         return float(num), currency
     except Exception:
@@ -204,7 +325,7 @@ def _from_json_ld(items: List[Dict[str, Any]]) -> Tuple[Optional[float], Optiona
 def _norm_availability(avail_raw: Optional[str]) -> Optional[str]:
     if not avail_raw:
         return None
-    a = avail_raw.lower()
+    a = str(avail_raw).lower()
     if "instock" in a or "in stock" in a:
         return "In stock"
     if "outofstock" in a or "out of stock" in a:
@@ -219,13 +340,11 @@ def _find_price_in_scripts(html: str) -> Tuple[Optional[float], Optional[str]]:
     """
     Last-resort: scan raw HTML/scripts for common JSON fields with price/currency.
     """
-    # currency (ISO code) if present anywhere
     curr = None
     curr_m = re.search(r'"(?:priceCurrency|currency)"\s*:\s*"([A-Z]{3})"', html, re.I)
     if curr_m:
         curr = curr_m.group(1).upper()
 
-    # common price keys
     price_patterns = [
         r'"price"\s*:\s*"(?P<p>\d[\d,\.]+)"',
         r'"price"\s*:\s*(?P<p>\d[\d,\.]+)',
@@ -242,9 +361,9 @@ def _find_price_in_scripts(html: str) -> Tuple[Optional[float], Optional[str]]:
                 return val, curr
     return None, curr
 
-# -------------------------
+# --------------------------------------------------------------------
 # Core scraping functions
-# -------------------------
+# --------------------------------------------------------------------
 def scrape_vendor(vendor_key: str) -> Dict[str, Any]:
     cfg = VENDOR_CONFIG[vendor_key]
     url = cfg["url"]
@@ -302,29 +421,77 @@ def scrape_vendor(vendor_key: str) -> Dict[str, Any]:
 
     return out
 
+# --------------------------------------------------------------------
+# Routing by product keywords → vendor key lists
+#   - Expand categories as needed
+#   - Keep results small (top 3–5) for speed and rate limits
+# --------------------------------------------------------------------
+CATEGORY_ROUTING: List[Tuple[List[str], List[str]]] = [
+    # Chairs / seating
+    (["chair", "seating", "ergonomic", "office chair"],
+     ["autonomous_ergochair_pro", "steelcase_gesture", "hermanmiller_aeron"]),
+
+    # Laptops / notebooks
+    (["laptop", "notebook", "ultrabook"],
+     ["lenovo_thinkpad_t_series", "dell_xps_13"]),
+
+    # Monitors / displays
+    (["monitor", "display", "screen"],
+     ["lg_ultragear_monitor"]),
+
+    # Keyboards
+    (["keyboard", "mx keys", "mechanical keyboard"],
+     ["logitech_mx_keys"]),
+
+    # Phones
+    (["phone", "iphone", "smartphone", "mobile phone"],
+     ["apple_iphone"]),
+
+    # SSD / storage
+    (["ssd", "solid state drive", "nvme", "970 evo"],
+     ["samsung_970_evo_plus"]),
+
+    # Webcams
+    (["webcam", "camera", "video conference"],
+      ["logitech_brio"]),
+
+    # Printers
+    (["printer", "laserjet", "laser printer"],
+      ["hp_laserjet_pro"]),
+
+    # Desks
+    (["standing desk", "desk", "workstation"],
+      ["uplift_standing_desk"]),
+]
+
+def _route_vendor_keys(query: str, max_vendors: int) -> List[str]:
+    q = (query or "").lower()
+    for keywords, keys in CATEGORY_ROUTING:
+        if any(k in q for k in keywords):
+            return keys[:max_vendors]
+
+    # Generic fallback: first N known vendors (acts as a baseline)
+    # You can reorder to prefer broader, evergreen vendors
+    all_keys = list(VENDOR_CONFIG.keys())
+    return all_keys[:max_vendors]
+
 def fetch_vendor_offers(query: str, max_vendors: int = 3) -> List[Dict[str, Any]]:
     """
-    Map simple queries to a curated list of vendor keys, then scrape each.
+    Map queries to a curated list of vendor keys, then scrape each.
     Extend this logic to route different products to different vendors.
     """
-    q = (query or "").lower()
-    if "chair" in q:
-        keys = ["autonomous_ergochair_pro", "steelcase_gesture", "hermanmiller_aeron"]
-    else:
-        keys = list(VENDOR_CONFIG.keys())
-
-    keys = keys[:max_vendors]
+    keys = _route_vendor_keys(query, max_vendors=max_vendors)
     results: List[Dict[str, Any]] = []
     for k in keys:
         try:
             results.append(scrape_vendor(k))
             time.sleep(1.0)  # be polite
         except Exception as e:
-            cfg = VENDOR_CONFIG[k]
+            cfg = VENDOR_CONFIG.get(k, {"name": k, "url": ""})
             results.append({
                 "vendor_key": k,
-                "vendor_name": cfg["name"],
-                "url": cfg["url"],
+                "vendor_name": cfg.get("name", k),
+                "url": cfg.get("url", ""),
                 "title": None,
                 "price": None,
                 "currency": None,

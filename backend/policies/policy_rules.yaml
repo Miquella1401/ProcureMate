@@ -1,0 +1,10 @@
+# Basic procurement policy rules (edit to your needs)
+currency_allowed: ["USD", "EUR", "Rupees"]
+banned_vendors: []
+required_title_keywords: ["chair", "ergonomic"]
+
+# Budget checks use unit price * quantity (only if currency is allowed)
+max_total_budget_usd: 100000  # example cap for whole order
+
+# Soft checks (we treat missing data as "unknown", not hard-fail)
+min_title_relevance: 0.5   # 0..1 (based on keyword coverage)
