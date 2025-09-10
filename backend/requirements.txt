@@ -1,0 +1,8 @@
+# Minimal dependencies for the Flask backend
+langchain>=0.2.14,<0.3
+langchain-google-genai>=2.0.0
+google-generativeai>=0.7.0
+crewai>=0.51.0
+pydantic>=2.6
+python-dotenv>=1.0.1
+flask>=3.0.0
