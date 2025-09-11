@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html, body, #root { height: 100%; }
+
+.gradient-blob {
+  position: absolute;
+  inset: -20% -10% auto -10%;
+  height: 60vh;
+  background: radial-gradient(35% 45% at 50% 40%, rgba(31,111,255,0.28), transparent 60%),
+              radial-gradient(35% 45% at 70% 60%, rgba(255,170,60,0.22), transparent 60%);
+  filter: blur(24px);
+  pointer-events: none;
+}
+
+.hero-pane {
+  background: linear-gradient(180deg, rgba(255,255,255,0.7), rgba(255,255,255,0.9));
+  backdrop-filter: blur(4px);
+}

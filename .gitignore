@@ -1,1 +1,43 @@
  
+# dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# testing
+coverage/
+*.lcov
+
+# build output
+dist/
+build/
+*.log
+
+# local env files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# editor settings
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*.swm
+
+# system files
+.DS_Store
+Thumbs.db
+
+# npm/yarn/pnpm lockfiles (keep only one, ignore the rest if unused)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# caches
+.npm
+.eslintcache
+.cache

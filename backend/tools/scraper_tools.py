@@ -1,502 +1,278 @@
-# tools/scraper_tools.py
+# -*- coding: utf-8 -*-
+"""
+scraper_tools.py
+Live marketplace scraping only (Walmart). No curated vendor fallbacks.
+
+Backward-compat exports preserved so existing imports don't crash:
+  - VENDOR_CONFIG: empty dict
+  - scrape_vendor(): raises a clear runtime error if called
+
+Public API you should use:
+  - fetch_vendor_offers(query: str, max_vendors: int = 3, sources: Tuple[str,...]=("walmart",))
+
+Output item shape:
+  {
+    "vendor_key": "walmart",
+    "vendor_name": "Walmart",
+    "url": str,
+    "title": Optional[str],
+    "price": Optional[float],
+    "currency": Optional[str],
+    "availability": Optional[str],  # "InStock"/"OutOfStock"/"PreOrder"/raw
+    "timestamp": int,
+    "error": Optional[str]
+  }
+"""
+
+from __future__ import annotations
+
+import json
 import re
 import time
-import json
-from typing import List, Dict, Any, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote_plus, urljoin
+
 import requests
 from bs4 import BeautifulSoup
 
-# Optional Playwright fallback for JS-heavy pages
-try:
-    from playwright.sync_api import sync_playwright
-    HAS_PLAYWRIGHT = True
-except Exception:
-    HAS_PLAYWRIGHT = False
+# ---------- Back-compat stubs (so old imports don't crash) ----------
+class VendorCfg:  # dummy placeholder for old type hints
+    pass
 
-HEADERS = {
+VENDOR_CONFIG: Dict[str, VendorCfg] = {}  # no curated vendors anymore
+
+def scrape_vendor(*args, **kwargs) -> Dict[str, Any]:
+    raise RuntimeError(
+        "scrape_vendor is deprecated: curated vendor scraping was removed. "
+        "Use fetch_vendor_offers(query, max_vendors, sources) instead."
+    )
+
+# ---------- HTTP helpers ----------
+
+_DEFAULT_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/123.0.0.0 Safari/537.36"
+        "Chrome/123.0 Safari/537.36"
     ),
     "Accept-Language": "en-US,en;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
-# --------------------------------------------------------------------
-# Vendor configuration
-#   - Add/adjust selectors per site as needed
-#   - Keep URLs to specific, high-signal product/PLP pages
-# --------------------------------------------------------------------
-VENDOR_CONFIG: Dict[str, Dict[str, Any]] = {
-    # ----- Chairs -----
-    "autonomous_ergochair_pro": {
-        "name": "Autonomous ErgoChair Pro",
-        "url": "https://www.autonomous.ai/office-chairs/ergonomic-chair",
-        "selectors": {
-            "title": ["meta[property='og:title']", "h1"],
-            "price": [
-                "meta[itemprop='price']",
-                "meta[property='product:price:amount']",
-                "span.price",
-                "span[class*='Price']",
-                "[data-test='product-price']",
-            ],
-            "currency": [
-                "meta[property='product:price:currency']",
-                "meta[itemprop='priceCurrency']",
-            ],
-            "availability": [
-                "link[itemprop='availability']",
-                "div.stock",
-                "span.availability",
-                "div[data-test='availability']",
-            ],
-        },
-    },
-    "steelcase_gesture": {
-        "name": "Steelcase Gesture",
-        "url": "https://store.steelcase.com/seating/gesture",
-        "selectors": {
-            "title": ["meta[property='og:title']", "h1"],
-            "price": [
-                "meta[itemprop='price']",
-                "meta[property='product:price:amount']",
-                "[data-test='product-price']",
-                "span[data-test='product-price']",
-                "span[data-testid='product-price']",
-                "span[class*='price']",
-                "div[class*='Price']",
-            ],
-            "currency": [
-                "meta[property='product:price:currency']",
-                "meta[itemprop='priceCurrency']",
-            ],
-            "availability": ["div.stock", "span.availability"],
-        },
-    },
-    "hermanmiller_aeron": {
-        "name": "Herman Miller Aeron (Size B)",
-        "url": "https://store.hermanmiller.com/office-chairs/aeron-chair/2294.html",
-        "selectors": {
-            "title": ["meta[property='og:title']", "h1"],
-            "price": [
-                "meta[itemprop='price']",
-                "meta[property='product:price:amount']",
-                "span.price",
-                "span[class*='Price']",
-            ],
-            "currency": [
-                "meta[property='product:price:currency']",
-                "meta[itemprop='priceCurrency']",
-            ],
-            "availability": ["div.stock", "span.availability"],
-        },
-    },
+def _fetch_static(url: str, timeout: int = 15) -> Optional[str]:
+    try:
+        resp = requests.get(url, headers=_DEFAULT_HEADERS, timeout=timeout)
+        if 200 <= resp.status_code < 300:
+            return resp.text
+        return None
+    except Exception:
+        return None
 
-    # ----- Laptops -----
-    "lenovo_thinkpad_t_series": {
-        "name": "Lenovo ThinkPad T Series",
-        "url": "https://www.lenovo.com/us/en/laptops/thinkpad/thinkpad-t-series/",
-        "selectors": {
-            "title": ["meta[property='og:title']", "h1"],
-            "price": ["span.price", "meta[itemprop='price']", "div[class*='price']"],
-            "currency": ["meta[itemprop='priceCurrency']", "meta[property='product:price:currency']"],
-            "availability": ["div.stock", "span.availability"],
-        },
-    },
-    "dell_xps_13": {
-        "name": "Dell XPS 13",
-        "url": "https://www.dell.com/en-us/shop/dell-laptops/xps-13-laptop/spd/xps-13-9340-laptop",
-        "selectors": {
-            "title": ["meta[property='og:title']", "h1"],
-            "price": ["span.price", "meta[itemprop='price']", "div[class*='price']"],
-            "currency": ["meta[itemprop='priceCurrency']", "meta[property='product:price:currency']"],
-            "availability": ["div.stock", "span.availability"],
-        },
-    },
+# ---------- Parsing helpers ----------
 
-    # ----- Monitors -----
-    "lg_ultragear_monitor": {
-        "name": "LG UltraGear Monitor",
-        "url": "https://www.lg.com/us/monitors/gaming-monitors",
-        "selectors": {
-            "title": ["meta[property='og:title']", "h1"],
-            "price": ["span.price", "meta[itemprop='price']", "div[class*='price']"],
-            "currency": ["meta[itemprop='priceCurrency']"],
-            "availability": ["div.stock", "span.availability"],
-        },
-    },
+def _parse_json_ld(soup: BeautifulSoup) -> List[Dict[str, Any]]:
+    data: List[Dict[str, Any]] = []
+    for tag in soup.select('script[type="application/ld+json"]'):
+        raw = (tag.string or tag.text or "").strip()
+        if not raw:
+            continue
+        try:
+            loaded = json.loads(raw)
+        except Exception:
+            continue
+        if isinstance(loaded, dict):
+            data.append(loaded)
+        elif isinstance(loaded, list):
+            data.extend([it for it in loaded if isinstance(it, dict)])
+    return data
 
-    # ----- Keyboards -----
-    "logitech_mx_keys": {
-        "name": "Logitech MX Keys",
-        "url": "https://www.logitech.com/en-us/products/keyboards/mx-keys",
-        "selectors": {
-            "title": ["meta[property='og:title']", "h1"],
-            "price": ["span.price", "meta[itemprop='price']", "div[class*='price']"],
-            "currency": ["meta[itemprop='priceCurrency']"],
-            "availability": ["div.stock", "span.availability"],
-        },
-    },
+def _from_json_ld(items: List[Dict[str, Any]]) -> Tuple[Optional[float], Optional[str], Optional[str]]:
+    """Extract (price, currency, availability) from JSON-LD Product.offers / AggregateOffer."""
+    def to_float(x: Any) -> Optional[float]:
+        try:
+            return float(str(x).replace(",", "").strip())
+        except Exception:
+            return None
 
-    # ----- Phones -----
-    "apple_iphone": {
-        "name": "Apple iPhone",
-        "url": "https://www.apple.com/iphone/",
-        "selectors": {
-            "title": ["meta[property='og:title']", "h1"],
-            "price": ["span.price", "meta[itemprop='price']", "div[class*='price']"],
-            "currency": ["meta[itemprop='priceCurrency']"],
-            "availability": ["div.stock", "span.availability"],
-        },
-    },
+    for obj in items:
+        typ = obj.get("@type")
+        if isinstance(typ, list):
+            typ = next((t for t in typ if t == "Product"), None)
+        if typ == "Product":
+            offers = obj.get("offers")
+            if isinstance(offers, dict):
+                return to_float(offers.get("price")), offers.get("priceCurrency"), offers.get("availability")
+            if isinstance(offers, list):
+                for off in offers:
+                    if isinstance(off, dict):
+                        price = to_float(off.get("price"))
+                        curr = off.get("priceCurrency")
+                        av = off.get("availability")
+                        if price is not None or curr or av:
+                            return price, curr, av
+    return None, None, None
 
-    # ----- SSDs -----
-    "samsung_970_evo_plus": {
-        "name": "Samsung 970 EVO Plus",
-        "url": "https://www.samsung.com/semiconductor/minisite/ssd/product/consumer/970evoplus/",
-        "selectors": {
-            "title": ["meta[property='og:title']", "h1"],
-            "price": ["span.price", "meta[itemprop='price']"],
-            "currency": ["meta[itemprop='priceCurrency']"],
-            "availability": ["div.stock", "span.availability"],
-        },
-    },
+_PRICE_RE = re.compile(r'"?price"?\s*[:=]\s*"?(?P<price>\d+(?:\.\d{1,2})?)"?', re.I)
+_CURR_RE  = re.compile(r'"?priceCurrency"?\s*[:=]\s*"?(?P<curr>[A-Z]{3})"?', re.I)
 
-    # ----- Webcams -----
-    "logitech_brio": {
-        "name": "Logitech Brio",
-        "url": "https://www.logitech.com/en-us/products/webcams/brio-4k-hdr-webcam",
-        "selectors": {
-            "title": ["meta[property='og:title']", "h1"],
-            "price": ["span.price", "meta[itemprop='price']"],
-            "currency": ["meta[itemprop='priceCurrency']"],
-            "availability": ["div.stock", "span.availability"],
-        },
-    },
+def _find_price_in_scripts(html: str) -> Tuple[Optional[float], Optional[str]]:
+    price = None
+    curr = None
+    m = _PRICE_RE.search(html)
+    if m:
+        try:
+            price = float(m.group("price"))
+        except Exception:
+            price = None
+    m2 = _CURR_RE.search(html)
+    if m2:
+        curr = m2.group("curr")
+    return price, curr
 
-    # ----- Printers -----
-    "hp_laserjet_pro": {
-        "name": "HP LaserJet Pro",
-        "url": "https://www.hp.com/us-en/shop/cv/laserjet-printers",
-        "selectors": {
-            "title": ["meta[property='og:title']", "h1"],
-            "price": ["span.price", "meta[itemprop='price']"],
-            "currency": ["meta[itemprop='priceCurrency']"],
-            "availability": ["div.stock", "span.availability"],
-        },
-    },
-
-    # ----- Desks -----
-    "uplift_standing_desk": {
-        "name": "UPLIFT Standing Desk",
-        "url": "https://www.upliftdesk.com/standing-desks/",
-        "selectors": {
-            "title": ["meta[property='og:title']", "h1"],
-            "price": ["span.price", "meta[itemprop='price']"],
-            "currency": ["meta[itemprop='priceCurrency']"],
-            "availability": ["div.stock", "span.availability"],
-        },
-    },
-}
-
-# --------------------------------------------------------------------
-# Helpers
-# --------------------------------------------------------------------
 def _first_text(soup: BeautifulSoup, selectors: List[str]) -> Optional[str]:
     for sel in selectors:
         el = soup.select_one(sel)
         if not el:
             continue
-        if el.name == "meta" and el.get("content"):
-            return el["content"].strip()
-        txt = (el.get_text() or "").strip()
+        if el.name == "meta":
+            content = el.get("content")
+            if content and content.strip():
+                return content.strip()
+        txt = el.get_text(strip=True)
         if txt:
             return txt
     return None
 
-def _fetch_static(url: str) -> Optional[str]:
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=25)
-        if r.status_code == 200:
-            return r.text
-    except Exception:
-        pass
-    return None
-
-def _fetch_dynamic(url: str, price_selector_hint: Optional[str] = None) -> Optional[str]:
-    if not HAS_PLAYWRIGHT:
+def _norm_availability(av: Optional[str]) -> Optional[str]:
+    if not av:
         return None
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-            page.set_default_timeout(25000)
-            page.goto(url)
-            # wait for a likely price selector and network to settle
-            try:
-                page.wait_for_selector(
-                    price_selector_hint or "meta[itemprop='price'], [data-test='product-price']",
-                    timeout=8000
-                )
-            except Exception:
-                pass
-            try:
-                page.wait_for_load_state("networkidle", timeout=8000)
-            except Exception:
-                pass
-            time.sleep(2.0)  # small buffer for late rendering
-            html = page.content()
-            browser.close()
-            return html
-    except Exception:
-        return None
+    av = av.lower()
+    if "instock" in av:
+        return "InStock"
+    if "outofstock" in av:
+        return "OutOfStock"
+    if "preorder" in av:
+        return "PreOrder"
+    return av
 
-def _parse_price(raw: Optional[str]) -> Tuple[Optional[float], Optional[str]]:
-    if not raw:
-        return None, None
-    # Currency hint by symbol if present
-    currency = "EUR" if "€" in raw else ("USD" if "$" in raw else None)
+# ---------- Walmart adapter (HTML) ----------
 
-    # Match numbers like 1,299.99 or 1.299,99 or 1299.99 etc.
-    m = re.search(r"([0-9]{1,3}(?:[.,][0-9]{3})*|[0-9]+)([.,][0-9]{2})?", raw)
-    if not m:
-        return None, currency
-    num = m.group(0)
-
-    # Normalize thousand/decimal separators
-    if num.count(",") and num.count("."):
-        # Decide which is decimal by last occurrence
-        if num.rfind(",") > num.rfind("."):  # decimal is comma
-            num = num.replace(".", "").replace(",", ".")
-        else:  # decimal is dot
-            num = num.replace(",", "")
-    else:
-        if num.endswith(",00"):
-            num = num.replace(",", ".")
-        elif "," in num and not num.endswith(",00"):
-            num = num.replace(",", "")
-
-    try:
-        return float(num), currency
-    except Exception:
-        return None, currency
-
-def _safe_float(x) -> Optional[float]:
-    try:
-        return float(str(x).replace(",", "").strip())
-    except Exception:
-        return None
-
-def _parse_json_ld(soup: BeautifulSoup) -> List[Dict[str, Any]]:
-    blocks = soup.find_all("script", type="application/ld+json")
-    items: List[Dict[str, Any]] = []
-    for b in blocks:
-        try:
-            data = json.loads(b.string or "")
-            if isinstance(data, dict):
-                items.append(data)
-            elif isinstance(data, list):
-                items.extend([d for d in data if isinstance(d, dict)])
-        except Exception:
-            pass
-    return items
-
-def _from_json_ld(items: List[Dict[str, Any]]) -> Tuple[Optional[float], Optional[str], Optional[str]]:
-    """
-    Try to pull price, currency, availability from JSON-LD 'offers'.
-    Returns (price, currency, availability)
-    """
-    price, currency, availability = None, None, None
-    for it in items:
-        offers = it.get("offers")
-        if not offers:
-            continue
-        if isinstance(offers, dict):
-            offers = [offers]
-        for off in offers:
-            price = price or _safe_float(off.get("price"))
-            currency = currency or (off.get("priceCurrency") or off.get("price_currency"))
-            availability = availability or off.get("availability")
-            if price and currency and availability:
-                return price, currency, availability
-    return price, currency, availability
-
-def _norm_availability(avail_raw: Optional[str]) -> Optional[str]:
-    if not avail_raw:
-        return None
-    a = str(avail_raw).lower()
-    if "instock" in a or "in stock" in a:
-        return "In stock"
-    if "outofstock" in a or "out of stock" in a:
-        return "Out of stock"
-    if "backorder" in a or "backordered" in a:
-        return "Backorder"
-    if "preorder" in a:
-        return "Preorder"
-    return avail_raw.strip()
-
-def _find_price_in_scripts(html: str) -> Tuple[Optional[float], Optional[str]]:
-    """
-    Last-resort: scan raw HTML/scripts for common JSON fields with price/currency.
-    """
-    curr = None
-    curr_m = re.search(r'"(?:priceCurrency|currency)"\s*:\s*"([A-Z]{3})"', html, re.I)
-    if curr_m:
-        curr = curr_m.group(1).upper()
-
-    price_patterns = [
-        r'"price"\s*:\s*"(?P<p>\d[\d,\.]+)"',
-        r'"price"\s*:\s*(?P<p>\d[\d,\.]+)',
-        r'"amount"\s*:\s*"(?P<p>\d[\d,\.]+)"',
-        r'"amount"\s*:\s*(?P<p>\d[\d,\.]+)',
-        r'"unit_price"\s*:\s*"(?P<p>\d[\d,\.]+)"',
-        r'"unit_price"\s*:\s*(?P<p>\d[\d,\.]+)',
-    ]
-    for pat in price_patterns:
-        m = re.search(pat, html, re.I)
-        if m:
-            val = _safe_float(m.group("p").replace(",", ""))
-            if val is not None:
-                return val, curr
-    return None, curr
-
-# --------------------------------------------------------------------
-# Core scraping functions
-# --------------------------------------------------------------------
-def scrape_vendor(vendor_key: str) -> Dict[str, Any]:
-    cfg = VENDOR_CONFIG[vendor_key]
-    url = cfg["url"]
-
-    # Try static first, then dynamic
+def walmart_search(query: str, max_items: int = 10) -> List[Dict[str, Any]]:
+    """Scrape Walmart search results (best-effort; markup can change)."""
+    url = f"https://www.walmart.com/search?q={quote_plus(query)}"
     html = _fetch_static(url)
+    results: List[Dict[str, Any]] = []
     if not html:
-        price_hint = (cfg["selectors"]["price"][0] if cfg["selectors"].get("price") else None)
-        html = _fetch_dynamic(url, price_selector_hint=price_hint)
-
-    out: Dict[str, Any] = {
-        "vendor_key": vendor_key,
-        "vendor_name": cfg["name"],
-        "url": url,
-        "title": None,
-        "price": None,
-        "currency": None,
-        "availability": None,
-        "timestamp": int(time.time()),
-        "error": None,
-    }
-    if not html:
-        out["error"] = "Failed to fetch (static+dynamic)"
-        return out
+        return results
 
     soup = BeautifulSoup(html, "html.parser")
 
-    # Primary extraction via DOM/meta
-    title_raw = _first_text(soup, cfg["selectors"]["title"])
-    price_raw = _first_text(soup, cfg["selectors"]["price"])
-    avail_raw = _first_text(soup, cfg["selectors"]["availability"])
-    curr_meta = _first_text(soup, cfg["selectors"].get("currency", []))
-    price_val, curr = _parse_price(price_raw)
-    curr = curr or curr_meta
+    # Try several card selectors (Walmart updates often)
+    cards = soup.select('[data-automation-id="productTile"]') \
+         or soup.select("div.mb0.ph0-xl.pr0-xl") \
+         or soup.select("div.search-result-gridview-item")
 
-    # JSON-LD fallback if anything missing
-    if price_val is None or curr is None or not avail_raw:
-        items = _parse_json_ld(soup)
-        j_price, j_curr, j_avail = _from_json_ld(items)
-        price_val = price_val if price_val is not None else j_price
-        curr = curr or j_curr
-        avail_raw = avail_raw or j_avail
-
-    # Raw script scan as last resort
-    if price_val is None:
-        s_price, s_curr = _find_price_in_scripts(html)
-        if s_price is not None:
-            price_val = s_price
-            curr = curr or s_curr
-
-    out["title"] = title_raw
-    out["price"] = price_val
-    out["currency"] = curr
-    out["availability"] = _norm_availability(avail_raw)
-
-    return out
-
-# --------------------------------------------------------------------
-# Routing by product keywords → vendor key lists
-#   - Expand categories as needed
-#   - Keep results small (top 3–5) for speed and rate limits
-# --------------------------------------------------------------------
-CATEGORY_ROUTING: List[Tuple[List[str], List[str]]] = [
-    # Chairs / seating
-    (["chair", "seating", "ergonomic", "office chair"],
-     ["autonomous_ergochair_pro", "steelcase_gesture", "hermanmiller_aeron"]),
-
-    # Laptops / notebooks
-    (["laptop", "notebook", "ultrabook"],
-     ["lenovo_thinkpad_t_series", "dell_xps_13"]),
-
-    # Monitors / displays
-    (["monitor", "display", "screen"],
-     ["lg_ultragear_monitor"]),
-
-    # Keyboards
-    (["keyboard", "mx keys", "mechanical keyboard"],
-     ["logitech_mx_keys"]),
-
-    # Phones
-    (["phone", "iphone", "smartphone", "mobile phone"],
-     ["apple_iphone"]),
-
-    # SSD / storage
-    (["ssd", "solid state drive", "nvme", "970 evo"],
-     ["samsung_970_evo_plus"]),
-
-    # Webcams
-    (["webcam", "camera", "video conference"],
-      ["logitech_brio"]),
-
-    # Printers
-    (["printer", "laserjet", "laser printer"],
-      ["hp_laserjet_pro"]),
-
-    # Desks
-    (["standing desk", "desk", "workstation"],
-      ["uplift_standing_desk"]),
-]
-
-def _route_vendor_keys(query: str, max_vendors: int) -> List[str]:
-    q = (query or "").lower()
-    for keywords, keys in CATEGORY_ROUTING:
-        if any(k in q for k in keywords):
-            return keys[:max_vendors]
-
-    # Generic fallback: first N known vendors (acts as a baseline)
-    # You can reorder to prefer broader, evergreen vendors
-    all_keys = list(VENDOR_CONFIG.keys())
-    return all_keys[:max_vendors]
-
-def fetch_vendor_offers(query: str, max_vendors: int = 3) -> List[Dict[str, Any]]:
-    """
-    Map queries to a curated list of vendor keys, then scrape each.
-    Extend this logic to route different products to different vendors.
-    """
-    keys = _route_vendor_keys(query, max_vendors=max_vendors)
-    results: List[Dict[str, Any]] = []
-    for k in keys:
-        try:
-            results.append(scrape_vendor(k))
-            time.sleep(1.0)  # be polite
-        except Exception as e:
-            cfg = VENDOR_CONFIG.get(k, {"name": k, "url": ""})
-            results.append({
-                "vendor_key": k,
-                "vendor_name": cfg.get("name", k),
-                "url": cfg.get("url", ""),
-                "title": None,
-                "price": None,
-                "currency": None,
-                "availability": None,
-                "timestamp": int(time.time()),
-                "error": str(e),
-            })
+    for card in cards:
+        a = (card.select_one('a[href][data-automation-id="product-title"]')
+             or card.select_one("a[href].absolute")
+             or card.select_one("a[href]"))
+        if not a:
+            continue
+        href = a.get("href")
+        if not href:
+            continue
+        prod_url = href if href.startswith("http") else urljoin("https://www.walmart.com", href)
+        title = (a.get_text() or "").strip() or (a.get("aria-label") or a.get("title") or "").strip()
+        if not title:
+            continue
+        results.append({"title": title, "url": prod_url})
+        if len(results) >= max_items:
+            break
     return results
+
+def walmart_product_details(url: str) -> Dict[str, Any]:
+    """Open Walmart PDP and extract details via JSON-LD with fallbacks."""
+    html = _fetch_static(url)
+    if not html:
+        return {
+            "vendor_key": "walmart",
+            "vendor_name": "Walmart",
+            "url": url,
+            "title": None, "price": None, "currency": None, "availability": None,
+            "timestamp": int(time.time()), "error": "fetch_failed",
+        }
+
+    soup = BeautifulSoup(html, "html.parser")
+    price, currency, availability = _from_json_ld(_parse_json_ld(soup))
+    if price is None or currency is None:
+        p2, c2 = _find_price_in_scripts(html)
+        price = price or p2
+        currency = currency or c2
+    title = _first_text(soup, ["meta[property='og:title']", "h1", "title"]) or None
+
+    return {
+        "vendor_key": "walmart",
+        "vendor_name": "Walmart",
+        "url": url,
+        "title": title,
+        "price": price,
+        "currency": currency,
+        "availability": _norm_availability(availability),
+        "timestamp": int(time.time()),
+        "error": None,
+    }
+
+def _safe_sleep(sec: float) -> None:
+    try:
+        time.sleep(sec)
+    except Exception:
+        pass
+
+def fetch_marketplace_offers(query: str, max_items: int = 5, sources: Tuple[str, ...] = ("walmart",)) -> List[Dict[str, Any]]:
+    """Return live offers from supported marketplaces."""
+    offers: List[Dict[str, Any]] = []
+    if "walmart" in sources:
+        try:
+            hits = walmart_search(query, max_items=max_items)
+            for h in hits:
+                try:
+                    offers.append(walmart_product_details(h["url"]))
+                    _safe_sleep(0.8)  # be polite
+                except Exception as e:
+                    offers.append({
+                        "vendor_key": "walmart", "vendor_name": "Walmart",
+                        "url": h.get("url"), "title": h.get("title"),
+                        "price": None, "currency": None, "availability": None,
+                        "timestamp": int(time.time()),
+                        "error": f"detail_error: {e}",
+                    })
+        except Exception as e:
+            offers.append({
+                "vendor_key": "walmart", "vendor_name": "Walmart",
+                "url": "", "title": None, "price": None, "currency": None, "availability": None,
+                "timestamp": int(time.time()),
+                "error": f"search_error: {e}",
+            })
+    return offers
+
+# ---------- Public API (compat with old callers) ----------
+
+def fetch_vendor_offers(query: str, max_vendors: int = 3, sources: Tuple[str, ...] = ("walmart",)) -> List[Dict[str, Any]]:
+    """
+    Backward-compatible signature (old code passes max_vendors).
+    Returns ONLY live scraped marketplace results.
+    """
+    print(f">>> fetch_vendor_offers: query='{query}', max_vendors={max_vendors}, sources={sources}")
+    offers = fetch_marketplace_offers(query=query, max_items=max_vendors, sources=sources)
+    print(f">>> fetch_vendor_offers: got {len(offers)} offers")
+    return offers
+
+__all__ = [
+    "fetch_vendor_offers",
+    "fetch_marketplace_offers",
+    "walmart_search",
+    "walmart_product_details",
+    "VENDOR_CONFIG",     # back-compat
+    "scrape_vendor",     # back-compat (raises)
+    "VendorCfg",         # back-compat (dummy)
+]
