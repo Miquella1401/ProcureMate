@@ -1,0 +1,23 @@
+Folder PATH listing
+Volume serial number is CE45-6096
+C:\USERS\KANAD\DESKTOP\ABC\SAD\PROCUREMATE\FRONTEND\SRC
+|   .gitkeep
+|   App.jsx
+|   index.css
+|   main.jsx
+|   
++---pages
+|       Analytics.jsx
+|       Approval.jsx
+|       Evaluation.jsx
+|       Home.jsx
+|       Negotiation.jsx
+|       Optimization.jsx
+|       
+\---services
+    |   api.js
+    |   
+    \---components
+            Loader.jsx
+            Navbar.jsx
+            
