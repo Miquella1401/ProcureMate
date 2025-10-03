@@ -1,0 +1,46 @@
+[
+  {
+    "vendor": "Vendor A",
+    "product": "Laptop 15-inch, Intel i7, 16GB RAM, 512GB SSD",
+    "sku": "LAP-1517-16-512",
+    "category": "laptop",
+    "price": 400,
+    "currency": "USD",
+    "availability": "In Stock",
+    "delivery_days": 5,
+    "url": "https://example.com/vendor-a/lap-1517"
+  },
+  {
+    "vendor": "Vendor B",
+    "product": "Laptop 15-inch, Intel i5, 8GB RAM, 256GB SSD",
+    "sku": "LAP-1515-8-256",
+    "category": "laptop",
+    "price": 520,
+    "currency": "USD",
+    "availability": "2 Weeks Delivery",
+    "delivery_days": 14,
+    "url": "https://example.com/vendor-b/lap-1515"
+  },
+  {
+    "vendor": "Vendor C",
+    "product": "Laptop 14-Inch, Ryzen 5, 16GB RAM, 512GB SSD",
+    "sku": "LAP-1485-16-512",
+    "category": "laptop",
+    "price": 499,
+    "currency": "USD",
+    "availability": "In Stock",
+    "delivery_days": 7,
+    "url": "https://example.com/vendor-c/lap-14r5"
+  },
+  {
+    "vendor": "Vendor D",
+    "product": "Laptop 13-inch, Intel i3, 8GB RAM, 256GB SSD",
+    "sku": "LAP-1313-8-256",
+    "category": "laptop",
+    "price": 429,
+    "currency": "USD",
+    "availability": "In Stock",
+    "delivery_days": 4,
+    "url": "https://example.com/vendor-d/lap-1313"
+  }
+]
