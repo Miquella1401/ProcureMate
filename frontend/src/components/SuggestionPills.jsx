@@ -1,6 +1,6 @@
 const SAMPLES = [
-  "Find a catering service for a 100-person event",
-  "Renew our software license for project management tools",
+ 
+  "request_text We need 50 laptops for our company with a budget of $500 each by September policy_text : Maximum unit price must be 500 USD, and delivery must be under 10 days",
   "Order new ergonomic office chairs"
 ];
 
